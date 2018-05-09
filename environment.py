@@ -1,10 +1,11 @@
 import numpy as np
 import gym
 from multiprocessing import Pipe, Process
+import cv2
 
 
 def worker(conn, env_id, seed):
-    env = gym.make(env_id)
+    env = EnvWrapper(env_id)
     env.seed(seed)
     while True:
         cmd, data = conn.recv()
@@ -20,7 +21,7 @@ def worker(conn, env_id, seed):
             conn.close()
             break
         elif cmd == 'get_spaces':
-            conn.send((env.observation_space.shape, env.action_space.n))
+            conn.send((env.observation_space, env.action_space))
         else:
             raise NotImplementedError
 
@@ -62,3 +63,34 @@ class ParallelEnvironment:
         self.close = close
         self.num_env = num_env
         self.obs_shape, self.actions = parents[0].recv()
+
+
+class EnvWrapper:
+
+    def __init__(self, env_id):
+        self.env = gym.make(env_id)
+        self.action_space = self.env.action_space.n
+        self.observation_space = (42, 42, 1)
+
+    def process_obs(self, obs):
+        frame = cv2.resize(obs, (80, 80))
+        frame = cv2.resize(frame, (42, 42))
+        frame = frame.mean(2)
+        frame = np.expand_dims(frame, 2)
+        frame *= (1.0 / 255.0)
+        return frame
+
+    def reset(self):
+        obs = self.env.reset()
+        return self.process_obs(obs)
+
+    def render(self):
+        self.env.render()
+
+    def step(self, action):
+        obs, rew, done, info = self.env.step(action)
+        obs = self.process_obs(obs) * (1 - done)  # Nullify observation if the episode is finished.
+        return obs, rew, done, info
+
+    def seed(self, seed):
+        self.env.seed(seed)
