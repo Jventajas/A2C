@@ -1,5 +1,4 @@
 
-
 def discount_with_dones(rewards, dones, gamma):
     discounted = []
     r = 0

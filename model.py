@@ -1,5 +1,7 @@
 import tensorflow as tf
+import tensorflow.contrib.eager as tfe
 
+layers = tf.keras.layers
 
 def greedy(actions):
     return tf.argmax(actions)
@@ -9,63 +11,59 @@ def boltzmann(actions):
     return tf.multinomial(actions, 1)
 
 
-class ActorCritic:
+class ActorCritic(tf.keras.Model):
 
-    def __init__(self, n_actions, selection_strategy=boltzmann):
-        conv1 = tf.layers.Conv2D(32, 5, activation=tf.nn.relu)
-        pool1 = tf.layers.MaxPooling2D(2, 2)
-        conv2 = tf.layers.Conv2D(64, 5, activation=tf.nn.relu)
-        pool2 = tf.layers.MaxPooling2D(2, 2)
-        flatten = tf.layers.Flatten()
-        fc_policy = tf.layers.Dense(n_actions, activation=None)
-        fc_value = tf.layers.Dense(1, activation=None)
+    def __init__(self, n_actions, selection_strategy=boltzmann, lr=0.001):
+        super(ActorCritic, self).__init__()
+        self.conv1 = layers.Conv2D(64, 5, padding='SAME', activation=tf.nn.relu)
+        self.pool1 = layers.MaxPool2D(4, 4)
+        self.conv2 = layers.Conv2D(128, 5, activation=tf.nn.relu)
+        self.pool2 = layers.MaxPool2D(4, 4)
+        self.flatten = layers.Flatten()
+        self.policy = layers.Dense(n_actions, activation=tf.nn.softmax)
+        self.value = layers.Dense(1, activation=None)
 
-        def forward(obs):
-            with tf.device('/cpu:0'):
-                x = tf.constant(obs, dtype=tf.float32)
-                x = conv1(x)
-                x = pool1(x)
-                x = conv2(x)
-                x = pool2(x)
-                return flatten(x)
+        self.selection_strategy = selection_strategy
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=lr)
 
-        def action(obs):
-            with tf.device('/cpu:0'):
-                x = forward(obs)
-                x = fc_policy(x)
-                x = tf.nn.softmax(x)
-                x = selection_strategy(x)
-                return x.numpy()
+    def preprocess(self, obs):
+        inputs = tf.constant(obs, dtype=tf.float32)
+        grayscale = tf.image.rgb_to_grayscale(inputs)
+        resized = tf.image.resize_images(grayscale, [42, 42])
+        return tf.map_fn(lambda image: tf.image.per_image_standardization(image), resized)
 
-        def value(obs):
-            with tf.device('/cpu:0'):
-                x = forward(obs)
-                x = fc_value(x)
-                return x.numpy()
+    def forward(self, obs):
+        inputs = self.preprocess(obs)
+        x = self.conv1(inputs)
+        x = self.pool1(x)
+        x = self.conv2(x)
+        x = self.pool2(x)
+        x = self.flatten(x)
+        policy = self.policy(x)
+        value = self.value(x)
+        return policy, value
 
-        def step(obs):
-            with tf.device('/cpu:0'):
-                x = forward(obs)
-                policy = fc_policy(x)
-                policy = tf.nn.softmax(policy)
-                act = selection_strategy(policy)
-                val = fc_value(x)
-                return act.numpy(), val.numpy()
+    def call(self, obs):
+        policy, value = self.forward(obs)
+        action = self.selection_strategy(policy)
+        return action.numpy(), value.numpy()
 
-        def learn(obs, rewards, masks, actions, values):
-            with tf.device('/cpu:0'):
-                advs = rewards - values
-                logits = forward(obs)
-                probs = tf.nn.softmax(logits)
-                xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=actions)
-                policy_loss = tf.reduce_mean(xentropy * advs)
-                value_loss = tf.reduce_mean(tf.square(advs))
-                entropy_loss = tf.reduce_mean(probs * tf.log(probs))
-                total_loss = policy_loss + value_loss - entropy_loss
+    def learn(self, obs, rewards, masks, actions, values):
 
+        with tfe.GradientTape(persistent=True) as tape:
+            advs = rewards - values
+            policy, value = self.forward(obs)
+            xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=policy, labels=actions)
+            policy_loss = tf.reduce_mean(xentropy * advs)
+            value_loss = tf.reduce_mean(tf.square(advs))
+            entropy_loss = tf.reduce_mean(policy * tf.log(policy))
+            total_loss = policy_loss + 0.5 * value_loss - 0.01 * entropy_loss
+            print("Total loss: {}".format(total_loss))
+            print("Average reward: {}".format(tf.reduce_mean(rewards)))
 
-
-        self.action = action
-        self.value = value
-        self.step = step
-        self.learn = learn
+        grads = tape.gradient(total_loss, self.variables)
+        grads, gl_norm = tf.clip_by_global_norm(grads, 5.0)
+        weight_norm = tf.global_norm(self.variables)
+        self.optimizer.apply_gradients(zip(grads, self.variables))
+        print("Weight norm: {}".format(weight_norm))
+        print("Gradient norm: {}".format(gl_norm))

@@ -9,7 +9,6 @@ def worker(conn, env_id, seed):
     while True:
         cmd, data = conn.recv()
         if cmd == 'step':
-            print(data)
             ob, reward, done, info = env.step(data)
             if done:
                 ob = env.reset()
@@ -21,7 +20,7 @@ def worker(conn, env_id, seed):
             conn.close()
             break
         elif cmd == 'get_spaces':
-            conn.send((env.observation_space, env.action_space))
+            conn.send((env.observation_space.shape, env.action_space.n))
         else:
             raise NotImplementedError
 
