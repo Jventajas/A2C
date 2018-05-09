@@ -2,7 +2,7 @@ import tensorflow as tf
 from model import ActorCritic
 from environment import ParallelEnvironment
 import numpy as np
-from time import time
+from utils import discount_with_dones
 
 tf.enable_eager_execution()
 
@@ -12,52 +12,50 @@ NUM_EPOCHS = 500
 ENV_NAME = 'Skiing-v0'
 
 
-def collect_rollout(env, agent, max_t):
-    ep_obs, ep_rew, ep_act, ep_vals = [], [], [], []
-    obs = env.reset()
+def collect_rollout(env, agent, initial_obs, max_t, gamma=0.99):
+    roll_obs, roll_rew, roll_act, roll_vals, roll_dones = [], [], [], [], []
+    obs = initial_obs
+    dones = [False for _ in range(env.num_env)]
 
     for n in range(max_t):
         actions, values = agent(obs)
-        ep_obs.append(obs)
-        ep_act.append(actions)
-        ep_vals.append(values)
+        roll_obs.append(obs)
+        roll_act.append(actions)
+        roll_vals.append(values)
+        roll_dones.append(dones)
         obs, rewards, dones, _ = env.step(actions)
-        ep_rew.append(rewards)
+        roll_rew.append(rewards)
 
-    ep_obs = np.asarray(ep_obs, dtype=np.float32).swapaxes(1, 0).reshape((env.num_env * max_t,) + env.obs_shape)
-    ep_rew = np.asarray(ep_rew, dtype=np.float32).swapaxes(1, 0)
-    ep_act = np.asarray(ep_act, dtype=np.int32).swapaxes(1, 0)
-    ep_vals = np.asarray(ep_vals, dtype=np.float32).swapaxes(1, 0)
+    roll_obs = np.asarray(roll_obs, dtype=np.float32).swapaxes(1, 0).reshape((env.num_env * max_t,) + env.obs_shape)
+    roll_rew = np.asarray(roll_rew, dtype=np.float32).swapaxes(1, 0)
+    roll_act = np.asarray(roll_act, dtype=np.int32).swapaxes(1, 0)
+    roll_vals = np.asarray(roll_vals, dtype=np.float32).swapaxes(1, 0)
+    _, last_values = agent(obs)
+
+    for n, (rewards, ep_dones, value) in enumerate(zip(roll_rew, roll_dones, last_values)):
+        rewards = rewards.tolist()
+        ep_dones = ep_dones.tolist()
+        if ep_dones[-1] == 0:
+
+            rewards = discount_with_dones(rewards + [value], ep_dones + [0], gamma)[:-1]
+        else:
+            rewards = discount_with_dones(rewards, ep_dones, gamma)
+        roll_rew[n] = rewards
 
 
-    # _, last_values = agent(obs)
-    #
-    # for n, (rewards, ep_dones, value) in enumerate(zip(ep_rew, ep_dones, last_values)):
-    #     rewards = rewards.tolist()
-    #     ep_dones = ep_dones.tolist()
-    #     if ep_dones[-1] == 0:
-    #
-    #         rewards = discount_with_dones(rewards + [value], ep_dones + [0], gamma)[:-1]
-    #     else:
-    #         rewards = discount_with_dones(rewards, ep_dones, gamma)
-    #     ep_rew[n] = rewards
-    #
-    #
-    # ep_rew = ep_rew.flatten()
-    # ep_act = ep_act.flatten()
-    # ep_vals = ep_vals.flatten()
-    # mb_masks = mb_masks.flatten()
+    roll_rew = roll_rew.flatten()
+    roll_act = roll_act.flatten()
+    roll_vals = roll_vals.flatten()
 
-    return ep_obs, ep_rew, ep_act, ep_vals
+
+    return obs, roll_obs, roll_rew, roll_act, roll_vals
 
 
 def train(env, agent, epochs):
+    initial_obs = env.reset()
     for i in range(epochs):
-        t1 = time()
-        print("Epoch number: {}".format(i + 1))
-        obs, rews, acts, vals = collect_rollout(env, agent, EP_LENGTH)
+        initial_obs, obs, rews, acts, vals = collect_rollout(env, agent, initial_obs, EP_LENGTH)
         agent.learn(obs, rews, acts, vals)
-        print("Epoch completed in: {}\n\n".format(time() - t1))
 
 
 def main():

@@ -29,7 +29,6 @@ def worker(conn, env_id, seed):
 class ParallelEnvironment:
 
     def __init__(self, env_id, num_env):
-
         parents, children = zip(*[Pipe() for _ in range(num_env)])
         processes = [Process(target=worker, args=(child_conn, env_id, n))
                      for n, child_conn in enumerate(children)]
@@ -89,7 +88,9 @@ class EnvWrapper:
 
     def step(self, action):
         obs, rew, done, info = self.env.step(action)
-        obs = self.process_obs(obs) * (1 - done)  # Nullify observation if the episode is finished.
+        if done:
+            obs = self.env.reset()
+        obs = self.process_obs(obs)
         return obs, rew, done, info
 
     def seed(self, seed):

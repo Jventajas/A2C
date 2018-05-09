@@ -7,7 +7,7 @@ layers = tf.keras.layers
 
 class ActorCritic(tf.keras.Model):
 
-    def __init__(self, n_actions, selection_strategy=boltzmann, lr=0.001, gamma=0.99):
+    def __init__(self, n_actions, selection_strategy=boltzmann, lr=0.001):
         super(ActorCritic, self).__init__()
         self.conv1 = layers.Conv2D(64, 5, padding='SAME', activation=tf.nn.relu)
         self.pool1 = layers.MaxPool2D(4, 4)
